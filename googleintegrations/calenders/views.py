@@ -44,6 +44,29 @@ class GoogleCalendarInitView(APIView):
             raise exceptions.ValidationError(str(e))
 
 class GoogleCalendarRedirectView(APIView):
+    def process_events(self, credentials):
+            service = build('calendar', 'v3', credentials=credentials)
+            events_result = service.events().list(calendarId='primary', maxResults=10, singleEvents=True,
+                                                  orderBy='startTime').execute()
+            events = events_result.get('items', [])
+            if not events:
+                return Response({'error': 'No upcoming events found.'}, status=404)
+            response = []
+            for event in events:
+                start = event['start'].get('dateTime', event['start'].get('date'))
+                response.append({'start': start, 'summary': event['summary']})
+            return response
+
+    def set_session(self, request, credentials):
+        request.session['credentials'] = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes,
+        }
+
     def get(self, request):
         try:
             state = request.session.get('state')
@@ -52,19 +75,8 @@ class GoogleCalendarRedirectView(APIView):
             flow = Flow.from_client_config(CLIENT_CONFIG, SCOPES, state=state, redirect_uri=os.getenv('REDIRECT_URI'))
             flow.fetch_token(authorization_response=request.build_absolute_uri())
             credentials = flow.credentials
-            request.session['credentials'] = {
-                'token': credentials.token,
-                'refresh_token': credentials.refresh_token,
-                'token_uri': credentials.token_uri,
-                'client_id': credentials.client_id,
-                'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes,
-            }
-            service = build('calendar', 'v3', credentials=credentials)
-            events_result = service.events().list(calendarId='primary', maxResults=10, singleEvents=True,
-                                                  orderBy='startTime').execute()
-            events = events_result.get('items', [])
-            return Response(events)
+            self.set_session(request, credentials)
+            return Response(self.process_events(credentials))
         except Exception as e:
             raise exceptions.ValidationError(str(e))
 
